@@ -61,7 +61,7 @@ Something else? Report it on the [issue tracker](https://github.com/onlinealarmk
 
 ## Privacy
 
-Everything stays on your device. Alarms, timers, labels, and settings live in Obsidian's plugin data store; the plugin never reads your notes, writes files to your vault, collects analytics, or makes network requests. The only external pages are GitHub and the author's online alarm clock, and they open only when you click a link.
+Everything stays on your device. Alarms, timers, labels, and settings live in Obsidian's plugin data store; the plugin never reads your notes, writes files to your vault, collects analytics, or makes network requests. The only external pages are GitHub and the Online Alarm Kur website, and they open only when you click a link.
 
 ## Platform support
 
@@ -79,6 +79,10 @@ npm run build
 
 `npm run check` runs the full gate: lint, strict type checks, tests with coverage, release validation, and a production build. The generated `main.js` is never committed; releases are published from GitHub tags.
 
-## Author and license
+## License
 
-Built by Burak Ozdemir, creator of [Online Alarm Kur](https://onlinealarmkur.com/en/), an online alarm clock and timer. [MIT License](LICENSE).
+The source code uses the [MIT License](LICENSE). Created by [Online Alarm Kur](https://onlinealarmkur.com/en/), which offers an online alarm clock, timer, stopwatch, countdown, and more.
+
+## Trademarks and brand assets
+
+The MIT License applies to the source code only. The Online Alarm Kur name, logos, icons, and other brand assets are not covered by it and remain reserved. The Online Alarm Kur name, logo, and icon artwork are reserved brand assets and are not licensed for use with another product or service.
