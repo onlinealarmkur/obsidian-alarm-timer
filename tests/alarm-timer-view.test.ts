@@ -1,6 +1,6 @@
 import type { WorkspaceLeaf } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EN_I18N } from "../src/i18n";
+import { createI18n, EN_I18N } from "../src/i18n";
 import { ItemService } from "../src/services/item-service";
 import { AlarmTimerView } from "../src/ui/alarm-timer-view";
 import { DEFAULT_SETTINGS, type AlarmItem, type PluginData, type TimerItem } from "../src/types";
@@ -14,6 +14,9 @@ import {
   getMockElementTexts,
   resetCreatedModals,
   resetRecordedNotices,
+  mockDocument,
+  resetMockDocument,
+  Modal,
   type MockElement
 } from "./mocks/obsidian";
 
@@ -67,14 +70,63 @@ function scheduledTimer(
 
 describe("AlarmTimerView", () => {
   beforeEach(() => {
+    resetMockDocument();
     resetCreatedModals();
     resetRecordedNotices();
-    vi.stubGlobal("window", { setTimeout: globalThis.setTimeout });
+    vi.stubGlobal("window", {
+      setTimeout: (callback: () => void, delay: number) => globalThis.setTimeout(callback, delay),
+      clearTimeout: (timer: number) => globalThis.clearTimeout(timer)
+    });
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("refreshes existing card dates on a zone-changing tick without rebuilding or changing draft/focus", async () => {
+    const NativeFormatter = Intl.DateTimeFormat;
+    let timeZone = "Europe/Madrid";
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (locale, options) {
+      return new NativeFormatter(locale, { ...options, timeZone: options?.timeZone ?? timeZone });
+    });
+    const i18n = createI18n("en-GB");
+    const timestamp = Date.UTC(2026, 8, 27, 12);
+    const data: PluginData = {
+      schemaVersion: 2,
+      settings: { ...DEFAULT_SETTINGS, use24HourTime: true },
+      items: [scheduledTimer("active", "Tea", "active", timestamp), scheduledTimer("history", "Old", "completed", timestamp)]
+    };
+    const items = new ItemService(data, { save: vi.fn(() => Promise.resolve()) }, i18n);
+    const view = new AlarmTimerView({} as WorkspaceLeaf, items, i18n);
+    await view.onOpen();
+    const dates = findElementsByClass(view.contentEl as unknown as MockElement, "online-alarm-timer-date");
+    const updates = dates.map((element) => vi.spyOn(element, "setText"));
+    const label = requireElement(findMockElementById(view.contentEl, "online-alarm-timer-view-alarm-label"), "draft input");
+    label.value = "Unsaved zone draft";
+    label.focus();
+    items.tick();
+    for (const update of updates) expect(update).not.toHaveBeenCalled();
+
+    timeZone = "America/New_York";
+    items.tick();
+
+    expect(findElementsByClass(view.contentEl as unknown as MockElement, "online-alarm-timer-date")).toEqual(dates);
+    const expected = new NativeFormatter("en-GB", { dateStyle: "medium", timeStyle: "short", hour12: false, timeZone }).format(timestamp);
+    for (const [index, date] of dates.entries()) {
+      expect(date.text).toBe(expected);
+      expect(updates[index]).toHaveBeenCalledOnce();
+    }
+    expect(label.value).toBe("Unsaved zone draft");
+    expect(mockDocument.activeElement).toBe(label);
+    const pause = findElementsByTag(view.contentEl as unknown as MockElement, "button").find((button) => button.text === "Pause");
+    pause?.focus();
+    timeZone = "Europe/Madrid";
+    items.tick();
+    expect(mockDocument.activeElement).toBe(pause);
+    expect(dates[0]?.text).toContain("14:00");
+    await view.onClose();
   });
 
   it("preserves form input and shell nodes across data and tick events", async () => {
@@ -582,6 +634,7 @@ describe("AlarmTimerView", () => {
   });
 
   it("opens a prefilled editor for an active alarm and closes after a successful save", async () => {
+    vi.useFakeTimers();
     const targetAt = Date.now() + 3_600_000;
     const alarm: AlarmItem = {
       id: "alarm",
@@ -602,6 +655,7 @@ describe("AlarmTimerView", () => {
     expect(getMockElementTexts(view.contentEl)).toContain("Edit");
     expect(clickMockElementByText(view.contentEl, "Edit")).toBe(true);
     const modal = getCreatedModals()[0];
+    vi.runOnlyPendingTimers();
     expect(modal?.title).toBe("Edit alarm");
     const label = requireElement(findMockElementById(modal?.contentEl, "online-alarm-timer-edit-alarm-label"), "modal label");
     expect(label.value).toBe("Meeting");
@@ -611,6 +665,114 @@ describe("AlarmTimerView", () => {
 
     await vi.waitFor(() => expect(modal?.isOpen).toBe(false));
     expect(items.items[0]).toMatchObject({ label: "Edited meeting", targetAt, status: "active" });
+    const replacement = findElementsByTag(view.contentEl as unknown as MockElement, "button").find((button) => button.text === "Edit");
+    expect(mockDocument.activeElement).toBe(replacement);
+    expect(replacement?.isConnected).toBe(true);
+    await view.onClose();
+  });
+
+  it("keeps the currently focused card control through an external data rerender", async () => {
+    const items = createItems();
+    const view = new AlarmTimerView({} as WorkspaceLeaf, items, EN_I18N);
+    await view.onOpen();
+    const button = (): MockElement | undefined => findElementsByTag(view.contentEl as unknown as MockElement, "button").find((control) => control.text === "Restart");
+    const original = button();
+    original?.focus();
+    await items.updateSettings({ volume: 71 });
+    expect(original?.isConnected).toBe(false);
+    expect(button()).not.toBe(original);
+    expect(mockDocument.activeElement).toBe(button());
+    expect(button()?.isConnected).toBe(true);
+    await view.onClose();
+  });
+
+  it("does not steal focus when a field is selected during an in-flight card action", async () => {
+    let finish: (() => void) | undefined;
+    const items = createItems();
+    const realPause = items.pauseTimer.bind(items);
+    vi.spyOn(items, "pauseTimer").mockImplementation(async (id) => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      await realPause(id);
+    });
+    const view = new AlarmTimerView({} as WorkspaceLeaf, items, EN_I18N);
+    await view.onOpen();
+    clickMockElementByText(view.contentEl, "Pause");
+    const label = requireElement(findMockElementById(view.contentEl, "online-alarm-timer-view-alarm-label"), "draft input");
+    label.focus();
+    finish?.();
+    await vi.waitFor(() => expect(items.items[0]?.status).toBe("paused"));
+    expect(mockDocument.activeElement).toBe(label);
+    await view.onClose();
+  });
+
+  it.each(["cancel", "removed", "other-field", "other-modal", "other-window", "closed-view"])(
+    "handles edit modal close safely with %s focus context", async (context) => {
+      vi.useFakeTimers();
+      const alarm: AlarmItem = {
+        id: "edit-context", type: "alarm", label: "Meeting", createdAt: Date.now(),
+        targetAt: Date.now() + 60_000, status: "active"
+      };
+      const items = new ItemService(
+        { schemaVersion: 2, settings: { ...DEFAULT_SETTINGS }, items: [alarm] },
+        { save: vi.fn(() => Promise.resolve()) }, EN_I18N
+      );
+      const view = new AlarmTimerView({} as WorkspaceLeaf, items, EN_I18N);
+      await view.onOpen();
+      clickMockElementByText(view.contentEl, "Edit");
+      const modal = getCreatedModals()[0];
+      vi.runOnlyPendingTimers();
+      const modalInput = modal?.contentEl.querySelector("input");
+      expect(mockDocument.activeElement).toBe(modalInput);
+      if (context === "removed") {
+        await items.cancel(alarm.id);
+        await items.clearCompleted();
+        expect(mockDocument.activeElement).toBe(modalInput);
+      }
+      const label = requireElement(findMockElementById(view.contentEl, "online-alarm-timer-view-alarm-label"), "draft input");
+      let otherInput: MockElement | undefined;
+      if (context === "other-field") label.focus();
+      if (context === "other-modal") {
+        const otherModal = new Modal({});
+        otherModal.open();
+        otherInput = otherModal.contentEl.createEl("input");
+        otherInput.focus();
+      }
+      if (context === "other-window") mockDocument.windowFocused = false;
+      if (context === "closed-view") await view.onClose();
+      modal?.close();
+      await Promise.resolve();
+      if (context === "cancel") {
+        expect(mockDocument.activeElement.text).toBe("Edit");
+        expect(mockDocument.activeElement.isConnected).toBe(true);
+      } else if (context === "removed") {
+        expect(mockDocument.activeElement.text).toBe("Active");
+      } else if (context === "other-field") expect(mockDocument.activeElement).toBe(label);
+      else if (context === "other-modal") expect(mockDocument.activeElement).toBe(otherInput);
+      else expect(mockDocument.activeElement).toBe(mockDocument.body);
+      await view.onClose();
+    }
+  );
+
+  it("cancels deferred edit autofocus after immediate modal close", async () => {
+    vi.useFakeTimers();
+    const alarm: AlarmItem = {
+      id: "fast-close", type: "alarm", label: "Meeting", createdAt: Date.now(),
+      targetAt: Date.now() + 60_000, status: "active"
+    };
+    const items = new ItemService(
+      { schemaVersion: 2, settings: { ...DEFAULT_SETTINGS }, items: [alarm] },
+      { save: vi.fn(() => Promise.resolve()) }, EN_I18N
+    );
+    const view = new AlarmTimerView({} as WorkspaceLeaf, items, EN_I18N);
+    await view.onOpen();
+    clickMockElementByText(view.contentEl, "Edit");
+    const modal = getCreatedModals()[0];
+    const input = modal?.contentEl.querySelector("input");
+    modal?.close();
+    await Promise.resolve();
+    vi.runOnlyPendingTimers();
+    expect(mockDocument.activeElement.text).toBe("Edit");
+    expect(input?.focused).toBe(false);
     await view.onClose();
   });
 

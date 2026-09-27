@@ -1,6 +1,6 @@
 import { ItemView, Notice, type WorkspaceLeaf } from "obsidian";
 import { VIEW_TYPE } from "../constants";
-import type { I18n } from "../i18n";
+import { systemTimeZone, type I18n } from "../i18n";
 import type { ItemService, ItemServiceEvent } from "../services/item-service";
 import { compareScheduledItems } from "../services/scheduler-logic";
 import type { ScheduledItem } from "../types";
@@ -27,6 +27,8 @@ export class AlarmTimerView extends ItemView {
   private activeTab: Tab = "alarm";
   private unsubscribe?: () => void;
   private readonly remainingEntries = new Map<string, RemainingEntry>();
+  private readonly dateEntries: RemainingEntry[] = [];
+  private renderedTimeZone?: string;
   private readonly tabButtons = new Map<Tab, HTMLButtonElement>();
   private formHost?: HTMLElement;
   private activeItemsHost?: HTMLElement;
@@ -37,6 +39,7 @@ export class AlarmTimerView extends ItemView {
   private readonly actionControls = new Map<string, HTMLElement>();
   private renderQueued = false;
   private pendingFocus?: string;
+  private lifecycleGeneration = 0;
 
   public constructor(leaf: WorkspaceLeaf, private readonly items: ItemService, private readonly i18n: I18n) { super(leaf); }
   public getViewType(): string { return VIEW_TYPE; }
@@ -45,6 +48,7 @@ export class AlarmTimerView extends ItemView {
   public override getIcon(): string { return "alarm-clock"; }
 
   public override onOpen(): Promise<void> {
+    ++this.lifecycleGeneration;
     this.visibleHistoryCount = HISTORY_PAGE_SIZE;
     this.containerEl.addClass("online-alarm-timer-view");
     this.unsubscribe = this.items.subscribe((event) => this.onServiceEvent(event));
@@ -55,9 +59,13 @@ export class AlarmTimerView extends ItemView {
   }
 
   public override onClose(): Promise<void> {
+    ++this.lifecycleGeneration;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.remainingEntries.clear();
+    this.dateEntries.length = 0;
+    this.renderedTimeZone = undefined;
+    this.actionControls.clear();
     this.tabButtons.clear();
     this.formHost = undefined;
     this.activeItemsHost = undefined;
@@ -93,6 +101,7 @@ export class AlarmTimerView extends ItemView {
     const pending = this.pendingFocus;
     this.pendingFocus = undefined;
     if (pending === undefined) return;
+    if (!this.contentEl.ownerDocument.hasFocus()) return;
     const exact = this.actionControls.get(pending);
     if (exact !== undefined) {
       exact.focus();
@@ -162,9 +171,16 @@ export class AlarmTimerView extends ItemView {
     const activeHost = this.activeItemsHost;
     const completedHost = this.completedItemsHost;
     if (activeHost === undefined || completedHost === undefined) return;
+    this.pendingFocus = undefined;
+    const focused = activeHost.ownerDocument.activeElement;
+    for (const [key, control] of this.actionControls) {
+      if (control === focused) this.pendingFocus = key;
+    }
+    this.renderedTimeZone = systemTimeZone();
     activeHost.empty();
     completedHost.empty();
     this.remainingEntries.clear();
+    this.dateEntries.length = 0;
     this.actionControls.clear();
     const active = this.items.items
       .filter((item) => item.status === "active" || item.status === "paused" || item.status === "fired")
@@ -187,9 +203,9 @@ export class AlarmTimerView extends ItemView {
     this.historySectionHeading = heading.createEl("h3", { attr: { tabindex: "-1" }, text: this.i18n.messages.history });
     if (accessibleCompleted.length > 0) {
       const clear = heading.createEl("button", { attr: { type: "button" }, text: this.i18n.messages.clearHistory });
+      this.actionControls.set(this.controlKey("", "clear-history"), clear);
       clear.addEventListener("click", () => {
         const key = this.controlKey("", "clear-history");
-        this.pendingFocus = key;
         void this.items.clearCompleted().catch(() => {
           if (this.pendingFocus === key) this.pendingFocus = undefined;
           new Notice(this.i18n.messages.historyClearFailed);
@@ -205,7 +221,6 @@ export class AlarmTimerView extends ItemView {
         showMore.setAttribute("data-online-alarm-timer-action", "show-more");
         this.actionControls.set(this.controlKey("", "show-more"), showMore);
         showMore.addEventListener("click", () => {
-          this.pendingFocus = this.controlKey("", "show-more");
           this.visibleHistoryCount += HISTORY_PAGE_SIZE;
           this.renderItems();
         });
@@ -260,7 +275,7 @@ export class AlarmTimerView extends ItemView {
     const summary = card.createDiv({ cls: "online-alarm-timer-card-summary" });
     summary.createEl("strong", { text: displayLabel(item, this.i18n) });
     summary.createSpan({ cls: "online-alarm-timer-type", text: item.type === "alarm" ? this.i18n.messages.alarm : this.i18n.messages.timer });
-    card.createDiv({
+    const date = card.createDiv({
       cls: "online-alarm-timer-date",
       text: item.status === "paused"
         ? this.i18n.messages.paused
@@ -268,6 +283,7 @@ export class AlarmTimerView extends ItemView {
           ? this.i18n.messages.alerting
           : formatDateTime(item.targetAt, this.items.settings.use24HourTime, this.i18n)
     });
+    if (item.status === "active") this.dateEntries.push({ item, element: date });
     if (item.status === "fired") {
       card.createDiv({ cls: "online-alarm-timer-remaining", text: this.i18n.messages.alerting });
       return;
@@ -277,7 +293,21 @@ export class AlarmTimerView extends ItemView {
     const actions = card.createDiv({ cls: "online-alarm-timer-actions" });
     if (item.type === "alarm" && item.status === "active" && !this.items.isAlertReserved(item.id)) {
       const edit = actions.createEl("button", { attr: { type: "button", "aria-label": this.i18n.messages.actionAria(this.i18n.messages.edit, accessibleName) }, text: this.i18n.messages.edit });
-      edit.addEventListener("click", () => new EditAlarmModal(this.app, this.items, item, this.i18n).open());
+      const key = this.controlKey(item.id, "edit");
+      this.actionControls.set(key, edit);
+      edit.addEventListener("click", () => {
+        const generation = this.lifecycleGeneration;
+        new EditAlarmModal(this.app, this.items, item, this.i18n, (closingFocus) => {
+          queueMicrotask(() => {
+            const document = edit.ownerDocument;
+            if (generation !== this.lifecycleGeneration || !document.hasFocus()) return;
+            const active = document.activeElement;
+            if (active !== document.body && active !== edit && active !== closingFocus) return;
+            this.pendingFocus = key;
+            this.restorePendingFocus();
+          });
+        }).open();
+      });
     }
     if (item.type === "timer" && (item.status === "active" || item.status === "paused")) {
       if (item.status === "paused") this.actionButton(actions, this.i18n.messages.resume, accessibleName, item.id, "resume", () => this.items.resumeTimer(item.id));
@@ -297,7 +327,8 @@ export class AlarmTimerView extends ItemView {
     const summary = card.createDiv({ cls: "online-alarm-timer-card-summary" });
     summary.createEl("strong", { text: displayLabel(item, this.i18n) });
     summary.createSpan({ cls: "online-alarm-timer-state", text: item.status === "completed" ? this.i18n.messages.completed : item.status === "missed" ? this.i18n.messages.missed : this.i18n.messages.cancelled });
-    card.createDiv({ cls: "online-alarm-timer-date", text: formatDateTime(item.targetAt, this.items.settings.use24HourTime, this.i18n) });
+    const date = card.createDiv({ cls: "online-alarm-timer-date", text: formatDateTime(item.targetAt, this.items.settings.use24HourTime, this.i18n) });
+    this.dateEntries.push({ item, element: date });
     if (item.type === "timer" && !this.items.isAlertReserved(item.id)) {
       const actions = card.createDiv({ cls: "online-alarm-timer-actions" });
       this.actionButton(actions, this.i18n.messages.restart, accessibleName, item.id, "restart", () => this.items.restartTimer(item.id));
@@ -324,7 +355,6 @@ export class AlarmTimerView extends ItemView {
     const key = this.controlKey(itemId, actionKey);
     this.actionControls.set(key, button);
     button.addEventListener("click", () => {
-      this.pendingFocus = key;
       void action().catch(() => {
         if (this.pendingFocus === key) this.pendingFocus = undefined;
         new Notice(this.i18n.messages.itemUpdateFailed);
@@ -352,6 +382,13 @@ export class AlarmTimerView extends ItemView {
   }
 
   private updateRemaining(): void {
+    const timeZone = systemTimeZone();
+    if (timeZone !== this.renderedTimeZone) {
+      this.renderedTimeZone = timeZone;
+      for (const { item, element } of this.dateEntries) {
+        element.setText(formatDateTime(item.targetAt, this.items.settings.use24HourTime, this.i18n));
+      }
+    }
     const now = Date.now();
     for (const { item, element } of this.remainingEntries.values()) {
       const remaining = item.type === "timer" && item.status === "paused" ? item.remainingMs : item.targetAt - now;

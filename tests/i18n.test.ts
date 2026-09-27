@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createI18n,
   LOCALE_DICTIONARIES,
@@ -23,6 +23,31 @@ function renderedValues(messages: Messages): string[] {
 }
 
 describe("localization", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("invalidates both clock formatters when the system zone changes, caching within a zone", () => {
+    const NativeFormatter = Intl.DateTimeFormat;
+    let timeZone = "Europe/Madrid";
+    const formatter = vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (locale, options) {
+      return new NativeFormatter(locale, { ...options, timeZone: options?.timeZone ?? timeZone });
+    });
+    const i18n = createI18n("en-GB");
+    const timestamp = Date.UTC(2026, 8, 27, 12);
+    const expected = (hour12: boolean): string => new NativeFormatter("en-GB", {
+      dateStyle: "medium", timeStyle: "short", hour12, timeZone
+    }).format(timestamp);
+    expect(i18n.formatDateTime(timestamp, true)).toBe(expected(false));
+    expect(i18n.formatDateTime(timestamp, false)).toBe(expected(true));
+    expect(i18n.formatDateTime(timestamp, true)).toBe(expected(false));
+    expect(formatter.mock.calls.filter(([, options]) => options?.dateStyle === "medium")).toHaveLength(2);
+
+    timeZone = "America/New_York";
+    expect(i18n.formatDateTime(timestamp, true)).toBe(expected(false));
+    expect(i18n.formatDateTime(timestamp, false)).toBe(expected(true));
+    expect(i18n.formatDateTime(timestamp, false)).toBe(expected(true));
+    expect(formatter.mock.calls.filter(([, options]) => options?.dateStyle === "medium")).toHaveLength(4);
+    expect(i18n.dateLocale).toBe("en-GB");
+  });
   it.each([
     [undefined, "en", "en"],
     ["", "en", "en"],

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { LIVE_POLL_TOLERANCE_MS } from "../src/constants";
+import { LIVE_POLL_TOLERANCE_MS, MAX_DURATION_MS } from "../src/constants";
 import { EN_I18N } from "../src/i18n";
 import { ItemService } from "../src/services/item-service";
 import { DEFAULT_SETTINGS, type AlarmItem, type PluginData, type ScheduledItem, type TimerItem } from "../src/types";
@@ -50,6 +50,46 @@ function scheduledTimer(id: string, status: TimerItem["status"], targetAt: numbe
 }
 
 describe("ItemService persistence", () => {
+  it.each([60_000, MAX_DURATION_MS])("bounds a paused %i ms timer after a backward clock change and resumes it", async (durationMs) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const save = vi.fn((_next: PluginData) => Promise.resolve());
+    const service = new ItemService(dataWith([]), { save }, EN_I18N);
+    const added = await service.addTimer(durationMs, "Rollback");
+    now.mockReturnValue(990_000);
+
+    await service.pauseTimer(added.id);
+
+    const paused = { ...added, status: "paused", remainingMs: durationMs };
+    expect(service.items).toEqual([paused]);
+    expect(save.mock.calls.at(-1)?.[0].items).toEqual([paused]);
+    now.mockReturnValue(995_000);
+    await service.resumeTimer(added.id);
+    expect(service.items).toEqual([{ ...added, targetAt: 995_000 + durationMs }]);
+    expect(save.mock.calls.at(-1)?.[0].items).toEqual(service.items);
+  });
+
+  it("preserves a rollback timer when pause persistence fails and permits retry", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const original = { ...timer(), durationMs: MAX_DURATION_MS, targetAt: 1_000_000 + MAX_DURATION_MS };
+    const save = vi.fn((_next: PluginData) => Promise.resolve()).mockRejectedValueOnce(new Error("storage unavailable"));
+    const service = new ItemService(dataWith([original]), { save }, EN_I18N);
+    now.mockReturnValue(990_000);
+    await expect(service.pauseTimer(original.id)).rejects.toThrow("storage unavailable");
+    expect(service.items).toEqual([original]);
+    expect(save.mock.calls[0]?.[0].items).toEqual([{ ...original, status: "paused", remainingMs: MAX_DURATION_MS }]);
+    await service.pauseTimer(original.id);
+    expect(service.items).toEqual([{ ...original, status: "paused", remainingMs: MAX_DURATION_MS }]);
+  });
+
+  it("keeps the zero floor when pausing an already due timer", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const original = { ...timer(), targetAt: 999_000 };
+    const save = vi.fn((_next: PluginData) => Promise.resolve());
+    const service = new ItemService(dataWith([original]), { save }, EN_I18N);
+    await service.pauseTimer(original.id);
+    expect(service.items).toEqual([{ ...original, status: "paused", remainingMs: 0 }]);
+    expect(save.mock.calls[0]?.[0].items).toEqual(service.items);
+  });
   it("persists the complete timer action lifecycle", async () => {
     const data = dataWith([]);
     const save = vi.fn(() => Promise.resolve());

@@ -97,13 +97,14 @@ export class AlarmTimerSettingTab extends PluginSettingTab {
                 && parsed.every((minutes, index) => minutes === this.items.settings.quickTimerMinutes[index])) return;
               await this.persistSetting("quickTimerMinutes", { quickTimerMinutes: parsed }, restore);
             };
-            text.setValue(currentValue()).onChange(async (value) => {
-              // A trailing separator is a normal intermediate state while entering
-              // another duration. Validate it only when the field loses focus.
-              if (/,[\s]*$/.test(value)) return;
-              await commit(value);
-            });
+            // Drafts can contain empty values and duplicate prefixes while typing.
+            text.setValue(currentValue());
             text.inputEl.addEventListener("blur", () => { void commit(text.inputEl.value); });
+            text.inputEl.addEventListener("keydown", (event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              void commit(text.inputEl.value);
+            });
           });
         }
       },

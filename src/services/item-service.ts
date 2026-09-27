@@ -270,7 +270,11 @@ export class ItemService {
 
     if (action === "pause") {
       if (item.type !== "timer" || item.status !== "active") return false;
-      draft.items[itemIndex] = { ...item, status: "paused", remainingMs: timerRemainingMs(item.targetAt, Date.now()) };
+      draft.items[itemIndex] = {
+        ...item,
+        status: "paused",
+        remainingMs: Math.min(item.durationMs, timerRemainingMs(item.targetAt, Date.now()))
+      };
       return true;
     }
 

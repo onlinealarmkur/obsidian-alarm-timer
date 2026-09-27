@@ -12,7 +12,8 @@ import {
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const temporaryRoots = [];
-const CURRENT_VERSION = "1.0.1";
+const { manifest: currentManifest } = await validMetadata();
+const CURRENT_VERSION = currentManifest.version;
 
 async function validMetadata() {
   return {
@@ -154,9 +155,9 @@ describe("release metadata validator", () => {
     await expect(validateReleaseMetadata({ projectRoot: root })).rejects.toThrow(message);
   });
 
-  it("requires the release tag to exactly match the manifest version", async () => {
+  it.each(["v1.0.0", "9.9.9"])("requires the release tag %s to exactly match the manifest version", async (tagName) => {
     const root = await createProject();
-    await expect(validateReleaseMetadata({ projectRoot: root, tagName: "v1.0.0" })).rejects.toThrow(
+    await expect(validateReleaseMetadata({ projectRoot: root, tagName })).rejects.toThrow(
       "The release tag must exactly match manifest.json version without a leading v."
     );
   });

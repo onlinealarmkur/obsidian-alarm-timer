@@ -54,7 +54,8 @@ function fakeRunner({
   errors = "",
   evalPrefix = "",
   falseEvalMarkers = [],
-  throwEvalMarkers = []
+  throwEvalMarkers = [],
+  throwEvalMessage
 } = {}) {
   let dataRestored = false;
   let snapshotValue;
@@ -74,7 +75,7 @@ function fakeRunner({
       const marker = evalMarker(args);
       const attempts = (evalAttempts.get(marker) ?? 0) + 1;
       evalAttempts.set(marker, attempts);
-      if (throwEvalMarkers.includes(marker)) throw new Error(`mock eval failure: ${marker}`);
+      if (throwEvalMarkers.includes(marker)) throw new Error(throwEvalMessage ?? `mock eval failure: ${marker}`);
       const forcedFalse = falseEvalMarkers.includes(marker);
       if (marker === "snapshot-plugin-data") {
         if (!forcedFalse) snapshotValue = preservedSnapshot;
@@ -516,9 +517,10 @@ describe("guarded Obsidian smoke test", () => {
       return result;
     });
     let thrown;
+    const log = vi.fn();
 
     try {
-      await runObsidianSmoke(options(), dependencies(runner, { runProcess }));
+      await runObsidianSmoke(options(), dependencies(runner, { runProcess, log }));
     } catch (error) {
       thrown = error;
     }
@@ -528,6 +530,7 @@ describe("guarded Obsidian smoke test", () => {
     expect(thrown).toMatchObject({ message: "Obsidian smoke cleanup failed." });
     expect(thrown.errors).toEqual(expect.arrayContaining([expect.objectContaining({ message: "mock cleanup dismiss failed" })]));
     expectVerifiedSnapshotCleanup(runner);
+    expect(log.mock.calls.flat().join("\n")).not.toContain("snapshot retained");
   });
 
   it("stops before UI mutation if the renderer snapshot does not survive plugin reload", async () => {
@@ -557,7 +560,7 @@ describe("guarded Obsidian smoke test", () => {
     expect(runner.calls.filter((call) => call.args[1] === "eval").map((call) => evalMarker(call.args))).toContain("verify-plugin-data-restored");
   });
 
-  it("skips restoration after quiescence fails while completing safe cleanup", async () => {
+  it("retains the recovery snapshot after quiescence fails", async () => {
     const runner = fakeRunner({ throwEvalMarkers: ["quiesce-plugin-data-writes"] });
     const log = vi.fn();
     let thrown;
@@ -577,10 +580,11 @@ describe("guarded Obsidian smoke test", () => {
     expect(markers).toContain("quiesce-plugin-data-writes");
     expect(markers).not.toContain("restore-plugin-data");
     expect(markers).not.toContain("verify-plugin-data-restored");
-    expect(markers).toContain("delete-plugin-data-snapshot");
+    expect(markers).not.toContain("delete-plugin-data-snapshot");
     expect(runner.wasDataRestored()).toBe(false);
-    expect(runner.wasSnapshotDeleted()).toBe(true);
-    expect(runner.hasSnapshot()).toBe(false);
+    expect(runner.wasSnapshotDeleted()).toBe(false);
+    expect(runner.hasSnapshot()).toBe(true);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("__alarmTimerSmokeSnapshot_test"));
   });
 
   it("reports restoration failure", async () => {
@@ -589,7 +593,8 @@ describe("guarded Obsidian smoke test", () => {
     await expect(runObsidianSmoke(options(), dependencies(runner))).rejects.toThrow(/cleanup failed/);
 
     expect(runner.wasDataRestored()).toBe(false);
-    expect(runner.wasSnapshotDeleted()).toBe(true);
+    expect(runner.wasSnapshotDeleted()).toBe(false);
+    expect(runner.hasSnapshot()).toBe(true);
     expect(runner.calls.filter((call) => call.args[1] === "eval").map((call) => evalMarker(call.args))).not.toContain("verify-plugin-data-restored");
   });
 
@@ -603,15 +608,44 @@ describe("guarded Obsidian smoke test", () => {
     expect(runner.hasSnapshot()).toBe(true);
   });
 
-  it("deletes the renderer snapshot after restoration verification fails", async () => {
+  it("retains the renderer snapshot after restoration verification fails", async () => {
     const runner = fakeRunner({ falseEvalMarkers: ["verify-plugin-data-restored"] });
 
     await expect(runObsidianSmoke(options(), dependencies(runner))).rejects.toThrow(/cleanup failed/);
 
     expect(runner.wasDataRestored()).toBe(true);
-    expect(runner.wasSnapshotDeleted()).toBe(true);
-    expect(runner.hasSnapshot()).toBe(false);
+    expect(runner.wasSnapshotDeleted()).toBe(false);
+    expect(runner.hasSnapshot()).toBe(true);
   });
+
+  it.each(["quiesce-plugin-data-writes", "restore-plugin-data", "cleanup-reload", "verify-plugin-data-restored"])(
+    "retains the snapshot and reports only its recovery key when %s fails", async (stage) => {
+      const runner = fakeRunner({
+        throwEvalMarkers: stage === "cleanup-reload" ? [] : [stage],
+        throwEvalMessage: PRESERVED_FIXTURE_TEXT
+      });
+      let reloads = 0;
+      const runProcess = vi.fn(async (file, args, commandOptions) => {
+        if (args[commandIndex(args)] === "plugin:reload" && ++reloads === 4 && stage === "cleanup-reload") {
+          throw new Error(PRESERVED_FIXTURE_TEXT);
+        }
+        return runner.runProcess(file, args, commandOptions);
+      });
+      const log = vi.fn();
+      let thrown;
+      try {
+        await runObsidianSmoke(options(), dependencies(runner, { runProcess, log }));
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(AggregateError);
+      expect(runner.hasSnapshot()).toBe(true);
+      expect(runner.wasSnapshotDeleted()).toBe(false);
+      expect(evalCallsForMarker(runner, "delete-plugin-data-snapshot")).toHaveLength(0);
+      expect(log).toHaveBeenCalledWith("Plugin-data recovery snapshot retained in sessionStorage under key __alarmTimerSmokeSnapshot_test.");
+      expect(`${formatSmokeError(thrown)}\n${log.mock.calls.flat().join("\n")}`).not.toContain(PRESERVED_FIXTURE_TEXT);
+    }
+  );
 
   it("rejects a screenshot inside the vault before spawning", async () => {
     await expectScreenshotPreflightFailure(join(vaultPath, "smoke.png"), /outside/);
