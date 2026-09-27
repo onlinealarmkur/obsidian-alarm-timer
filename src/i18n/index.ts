@@ -62,13 +62,20 @@ export function createI18n(rawLanguage: string | null | undefined): I18n {
   const resolved = resolveLocale(rawLanguage);
   const messages = dictionaries[resolved.language];
   const formatters = new Map<boolean, Intl.DateTimeFormat>();
+  let formatterTimeZone: string | undefined;
   const formatterFor = (use24Hour: boolean): Intl.DateTimeFormat => {
+    const timeZone = systemTimeZone();
+    if (timeZone !== formatterTimeZone) {
+      formatters.clear();
+      formatterTimeZone = timeZone;
+    }
     const cached = formatters.get(use24Hour);
     if (cached !== undefined) return cached;
     const formatter = new Intl.DateTimeFormat(resolved.dateLocale, {
       dateStyle: "medium",
       timeStyle: "short",
-      hour12: !use24Hour
+      hour12: !use24Hour,
+      timeZone
     });
     formatters.set(use24Hour, formatter);
     return formatter;
@@ -85,6 +92,10 @@ export function createI18n(rawLanguage: string | null | undefined): I18n {
       return item.label.trim() || (item.type === "alarm" ? messages.alarm : messages.timer);
     }
   });
+}
+
+export function systemTimeZone(): string {
+  return new Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
 export const EN_I18N = createI18n("en");

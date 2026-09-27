@@ -1,6 +1,6 @@
 {
   "name": "alarm-timer",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
   "description": "Set one-time alarms for specific times and run multiple countdown timers from the sidebar.",
   "type": "module",
@@ -43,7 +43,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
-    "@vitest/coverage-v8": "^4.0.15",
+    "@vitest/coverage-v8": "^4.1.11",
     "esbuild": "^0.28.1",
     "eslint": "^9.39.1",
     "eslint-plugin-obsidianmd": "^0.4.1",
@@ -53,6 +53,6 @@
     "tslib": "^2.8.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.65.0",
-    "vitest": "^4.0.15"
+    "vitest": "^4.1.11"
   }
 }

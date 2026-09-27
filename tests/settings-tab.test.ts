@@ -13,7 +13,8 @@ import {
   MockApp,
   Plugin,
   resetCreatedSettings,
-  resetRecordedNotices
+  resetRecordedNotices,
+  MockEvent
 } from "./mocks/obsidian";
 
 interface SettingsFixture {
@@ -191,6 +192,7 @@ describe("AlarmTimerSettingTab", () => {
     const text = requiredSetting("Quick timer durations").texts[0];
 
     await text?.trigger(value);
+    text?.inputEl.dispatch("blur");
 
     expect(text?.value).toBe("1, 5, 10, 15, 30, 60");
     expect(fixture.updateSettings).not.toHaveBeenCalled();
@@ -203,27 +205,47 @@ describe("AlarmTimerSettingTab", () => {
     const text = requiredSetting("Quick timer durations").texts[0];
 
     await text?.trigger("30, 5, 30, 1");
+    text?.inputEl.dispatch("blur");
 
     expect(text?.value).toBe("30, 5, 1");
     expect(fixture.updateSettings).toHaveBeenCalledWith({ quickTimerMinutes: [30, 5, 1] });
     expect(fixture.settings.quickTimerMinutes).toEqual([30, 5, 1]);
   });
 
-  it("allows a trailing separator while another quick duration is being typed", async () => {
+  it("preserves every character of a quick-duration draft until Enter", async () => {
     const fixture = createFixture();
     render(fixture.tab);
     const text = requiredSetting("Quick timer durations").texts[0];
 
-    await text?.trigger("2,");
-
-    expect(text?.value).toBe("2,");
-    expect(fixture.updateSettings).not.toHaveBeenCalled();
-    expect(getRecordedNotices()).toEqual([]);
-
-    await text?.trigger("2, 20");
+    for (const value of ["", "2", "2,", "2, ", "2, 2", "2, 20"]) {
+      await text?.trigger(value);
+      expect(text?.value).toBe(value);
+      expect(fixture.updateSettings).not.toHaveBeenCalled();
+      expect(getRecordedNotices()).toEqual([]);
+    }
+    const event = text?.inputEl.dispatch("keydown", new MockEvent("Enter"));
 
     expect(text?.value).toBe("2, 20");
     expect(fixture.updateSettings).toHaveBeenCalledWith({ quickTimerMinutes: [2, 20] });
+    expect(event?.defaultPrevented).toBe(true);
+    text?.inputEl.dispatch("blur");
+    expect(fixture.updateSettings).toHaveBeenCalledOnce();
+  });
+
+  it("allows deletion and replacement without saving partial drafts", async () => {
+    const fixture = createFixture();
+    render(fixture.tab);
+    const text = requiredSetting("Quick timer durations").texts[0];
+    for (const value of ["1, 5", "1,", "1", "", "4", "45, 45, 9"]) {
+      await text?.trigger(value);
+      expect(text?.value).toBe(value);
+      expect(fixture.updateSettings).not.toHaveBeenCalled();
+    }
+    text?.inputEl.dispatch("keydown", new MockEvent("Escape"));
+    expect(fixture.updateSettings).not.toHaveBeenCalled();
+    text?.inputEl.dispatch("blur");
+    expect(fixture.settings.quickTimerMinutes).toEqual([45, 9]);
+    expect(text?.value).toBe("45, 9");
   });
 
   it("restores an unfinished quick duration when the field loses focus", async () => {
@@ -245,6 +267,7 @@ describe("AlarmTimerSettingTab", () => {
 
     await requiredSetting("Default timer duration").texts[0]?.trigger("25");
     await requiredSetting("Quick timer durations").texts[0]?.trigger("2, 20, 120");
+    requiredSetting("Quick timer durations").texts[0]?.inputEl.dispatch("blur");
     await requiredSetting("Use 24-hour time").toggles[0]?.trigger(true);
     await requiredSetting("Show next item in status bar").toggles[0]?.trigger(false);
     await requiredSetting("Enable sound").toggles[0]?.trigger(false);
@@ -433,6 +456,7 @@ describe("AlarmTimerSettingTab", () => {
 
     await timer?.trigger("25");
     await quick?.trigger("2, 20, 120");
+    quick?.inputEl.dispatch("blur");
     await clock?.trigger(true);
     await status?.trigger(false);
     await sound?.trigger(false);
@@ -518,15 +542,17 @@ describe("AlarmTimerSettingTab", () => {
     render(fixture.tab);
     const quick = requiredSetting("Quick timer durations").texts[0];
 
-    const olderChange = quick?.trigger("2, 20");
-    const newerChange = quick?.trigger("3, 30, 3");
+    await quick?.trigger("2, 20");
+    quick?.inputEl.dispatch("blur");
+    await quick?.trigger("3, 30, 3");
+    quick?.inputEl.dispatch("blur");
     firstSave.reject(new Error("older save failed"));
-    await olderChange;
+    await firstSave.promise.catch(() => undefined);
     expect(quick?.value).toBe("3, 30");
     expect(getRecordedNotices()).toEqual([]);
 
     secondSave.resolve(undefined);
-    await newerChange;
+    await vi.waitFor(() => expect(fixture.settings.quickTimerMinutes).toEqual([3, 30]));
     expect(fixture.settings.quickTimerMinutes).toEqual([3, 30]);
     expect(quick?.value).toBe("3, 30");
     expect(getRecordedNotices()).toEqual([]);

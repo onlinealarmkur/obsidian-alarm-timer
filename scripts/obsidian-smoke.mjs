@@ -528,10 +528,11 @@ export async function runObsidianSmoke(options, dependencies = {}) {
       "Plugin-data write quiescence"
     );
     dataWritesQuiesced = true;
-  } catch (error) {
-    cleanupErrors.push(error);
+  } catch {
+    cleanupErrors.push(new Error("Plugin-data write quiescence failed."));
   }
   let dataRestored = false;
+  let restorationVerified = false;
   if (dataWritesQuiesced) {
     try {
       await requireEvalTrue(
@@ -540,8 +541,8 @@ export async function runObsidianSmoke(options, dependencies = {}) {
         "Plugin-data restoration"
       );
       dataRestored = true;
-    } catch (error) {
-      cleanupErrors.push(error);
+    } catch {
+      cleanupErrors.push(new Error("Plugin-data restoration failed."));
     }
   }
   if (dataRestored) {
@@ -549,8 +550,8 @@ export async function runObsidianSmoke(options, dependencies = {}) {
     try {
       await cli("plugin:reload", `id=${PLUGIN_ID}`);
       reloaded = true;
-    } catch (error) {
-      cleanupErrors.push(error);
+    } catch {
+      cleanupErrors.push(new Error("Plugin reload after data restoration failed."));
     }
     if (reloaded) {
       try {
@@ -559,15 +560,23 @@ export async function runObsidianSmoke(options, dependencies = {}) {
           `${pluginAccess("loadData")}const snapshot=sessionStorage.getItem(${JSON.stringify(snapshotKey)});return typeof snapshot==="string"&&JSON.stringify(await plugin.loadData())===snapshot;})()`,
           "Plugin-data restoration verification"
         );
-      } catch (error) {
-        cleanupErrors.push(error);
+        restorationVerified = true;
+      } catch {
+        cleanupErrors.push(new Error("Plugin-data restoration verification failed."));
       }
     }
   }
-  try {
-    await deleteSnapshot();
-  } catch (error) {
-    cleanupErrors.push(error);
+  let snapshotDeleted = false;
+  if (restorationVerified) {
+    try {
+      await deleteSnapshot();
+      snapshotDeleted = true;
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (!snapshotDeleted) {
+    log(`Plugin-data recovery snapshot retained in sessionStorage under key ${snapshotKey}.`);
   }
   if (workflowError !== undefined && cleanupErrors.length > 0) {
     throw new AggregateError([workflowError, ...cleanupErrors], "Obsidian smoke workflow and cleanup both failed.");

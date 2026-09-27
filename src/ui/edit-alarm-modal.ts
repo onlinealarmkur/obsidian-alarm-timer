@@ -5,13 +5,17 @@ import type { AlarmItem } from "../types";
 import { createEditAlarmForm } from "./forms";
 
 export class EditAlarmModal extends Modal {
+  private focusTimer?: number;
+  private readonly opener: Element | null;
   public constructor(
     app: App,
     private readonly items: ItemService,
     private readonly item: AlarmItem,
-    private readonly i18n: I18n
+    private readonly i18n: I18n,
+    private readonly onClosed?: (closingFocus: Element | null) => void
   ) {
     super(app);
+    this.opener = this.modalEl.ownerDocument.activeElement;
   }
 
   public override onOpen(): void {
@@ -25,10 +29,25 @@ export class EditAlarmModal extends Modal {
       () => this.close(),
       this.i18n
     );
-    window.setTimeout(() => form.querySelector<HTMLInputElement>("input")?.focus(), 0);
+    this.focusTimer = window.setTimeout(() => {
+      this.focusTimer = undefined;
+      const document = this.modalEl.ownerDocument;
+      const active = document.activeElement;
+      if (document.hasFocus() && this.modalEl.isConnected
+        && (active === document.body || active === this.opener || this.modalEl.contains(active))) {
+        form.querySelector<HTMLInputElement>("input")?.focus();
+      }
+    }, 0);
   }
 
   public override onClose(): void {
+    if (this.focusTimer !== undefined) window.clearTimeout(this.focusTimer);
+    this.focusTimer = undefined;
+    const document = this.modalEl.ownerDocument;
+    const active = document.activeElement;
+    const ownedFocus = document.hasFocus()
+      && (active === document.body || active === this.opener || this.modalEl.contains(active));
     this.contentEl.empty();
+    if (ownedFocus) this.onClosed?.(active);
   }
 }

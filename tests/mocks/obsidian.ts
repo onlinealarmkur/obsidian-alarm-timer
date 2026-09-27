@@ -33,8 +33,35 @@ export class MockElement {
   public text = "";
   public type = "";
   public value = "";
+  public parentElement: MockElement | null = null;
+  public readonly ownerDocument = mockDocument;
 
   public constructor(public readonly tagName = "div") {}
+
+  public get isConnected(): boolean {
+    return this === mockDocument.body || (this.parentElement?.isConnected ?? false);
+  }
+
+  public contains(element: MockElement | null): boolean {
+    return element !== null && (element === this || this.children.some((child) => child.contains(element)));
+  }
+
+  public appendChild(child: MockElement): MockElement {
+    child.parentElement = this;
+    this.children.push(child);
+    return child;
+  }
+
+  public remove(): void {
+    const parent = this.parentElement;
+    if (parent === null) return;
+    if (this.contains(mockDocument.activeElement)) {
+      mockDocument.activeElement.focused = false;
+      mockDocument.activeElement = mockDocument.body;
+    }
+    parent.children.splice(parent.children.indexOf(this), 1);
+    this.parentElement = null;
+  }
 
   public addClass(className: string): void {
     for (const name of className.split(/\s+/).filter(Boolean)) this.classes.add(name);
@@ -62,7 +89,7 @@ export class MockElement {
     child.text = options.text ?? "";
     if (options.cls !== undefined) child.addClass(options.cls);
     for (const [name, value] of Object.entries(options.attr ?? {})) child.setAttribute(name, String(value));
-    this.children.push(child);
+    this.appendChild(child);
     return child;
   }
 
@@ -79,11 +106,14 @@ export class MockElement {
   }
 
   public empty(): void {
+    for (const child of [...this.children]) child.remove();
     this.children.length = 0;
     this.text = "";
   }
 
   public focus(): void {
+    mockDocument.activeElement.focused = false;
+    mockDocument.activeElement = this;
     this.focused = true;
   }
 
@@ -135,6 +165,26 @@ export class MockElement {
   }
 }
 
+export const mockDocument: {
+  body: MockElement;
+  activeElement: MockElement;
+  windowFocused: boolean;
+  hasFocus: () => boolean;
+} = {
+  body: undefined as unknown as MockElement,
+  activeElement: undefined as unknown as MockElement,
+  windowFocused: true,
+  hasFocus: () => mockDocument.windowFocused
+};
+mockDocument.body = new MockElement("body");
+mockDocument.activeElement = mockDocument.body;
+
+export function resetMockDocument(): void {
+  mockDocument.body.empty();
+  mockDocument.activeElement = mockDocument.body;
+  mockDocument.windowFocused = true;
+}
+
 function findElementByText(element: MockElement, text: string): MockElement | undefined {
   if (element.text === text) return element;
   for (const child of element.children) {
@@ -148,6 +198,7 @@ export function clickMockElementByText(root: unknown, text: string): boolean {
   if (!(root instanceof MockElement)) return false;
   const element = findElementByText(root, text);
   if (element === undefined) return false;
+  element.focus();
   element.dispatch("click");
   return true;
 }
@@ -236,12 +287,14 @@ export class Modal {
   public title = "";
 
   public constructor(public readonly app: unknown) {
+    this.modalEl.appendChild(this.contentEl);
     modals.push(this);
   }
 
   public open(): void {
     if (this.isOpen) return;
     this.isOpen = true;
+    mockDocument.body.appendChild(this.modalEl);
     ++this.openCount;
     this.onOpen();
     if (nextModalOpenError !== undefined) {
@@ -256,6 +309,7 @@ export class Modal {
     this.isOpen = false;
     ++this.closeCount;
     this.onClose();
+    this.modalEl.remove();
   }
 
   public onOpen(): void {
@@ -299,7 +353,10 @@ export class ItemView {
   public readonly containerEl = new MockElement();
   public readonly contentEl = new MockElement();
 
-  public constructor(public readonly leaf: unknown) {}
+  public constructor(public readonly leaf: unknown) {
+    this.containerEl.appendChild(this.contentEl);
+    mockDocument.body.appendChild(this.containerEl);
+  }
 }
 
 export interface MockCommand {
