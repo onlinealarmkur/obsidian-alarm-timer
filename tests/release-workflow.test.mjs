@@ -74,7 +74,7 @@ describe("GitHub Actions release hardening", () => {
     const attestation = namedStep(build, "Attest release assets");
 
     expect(attestation).toContain(
-      "uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1",
+      "uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2",
     );
     expect(attestation).toContain(
       "subject-path: |\n            main.js\n            manifest.json\n            styles.css",
