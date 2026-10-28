@@ -1,7 +1,6 @@
 {
   "compilerOptions": {
-    "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] },
+    "paths": { "@/*": ["./src/*"] },
     "typeRoots": ["node_modules/@types", "node_modules/obsidian"],
     "inlineSourceMap": true,
     "inlineSources": true,
@@ -21,7 +20,6 @@
     "useUnknownInCatchVariables": true,
     "moduleResolution": "Bundler",
     "importHelpers": true,
-    "downlevelIteration": true,
     "isolatedModules": true,
     "skipLibCheck": true,
     "lib": ["DOM", "DOM.Iterable", "ES2022"]

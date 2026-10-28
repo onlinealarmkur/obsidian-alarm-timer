@@ -11,8 +11,8 @@ export const ALLOWED_PEER_PROBLEMS = Object.freeze([
   "missing: @codemirror/view@6.38.1, required by obsidian-min@npm:obsidian@1.10.0",
   "missing: @codemirror/state@6.5.0, required by obsidian@1.12.3",
   "missing: @codemirror/view@6.38.6, required by obsidian@1.12.3",
-  "missing: @codemirror/state@6.5.0, required by obsidian@1.13.1",
-  "missing: @codemirror/view@6.38.6, required by obsidian@1.13.1"
+  "missing: @codemirror/state@6.7.6, required by obsidian@1.14.4",
+  "missing: @codemirror/view@6.43.13, required by obsidian@1.14.4"
 ]);
 
 const ALLOWED_PEER_PROBLEM_SET = new Set(ALLOWED_PEER_PROBLEMS);

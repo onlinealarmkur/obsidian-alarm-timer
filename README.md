@@ -79,6 +79,8 @@ npm run build
 
 `npm run check` runs the full gate: lint, strict type checks, tests with coverage, release validation, and a production build. The generated `main.js` is never committed; releases are published from GitHub tags.
 
+Development dependencies use the latest compatible releases. ESLint and `@eslint/js` stay on version 9 for the Obsidian lint plugin, and TypeScript stays on 6.0 while `typescript-eslint` requires a version below 6.1. Node types follow the Node 24 toolchain. The `obsidian-min` alias intentionally checks the minimum supported Obsidian 1.10 API. A Moment 2.31 override patches the older Moment dependency in those type-only fixtures; the plugin does not bundle Moment.
+
 ## License
 
 The source code uses the [MIT License](LICENSE). Created by [Online Alarm Kur](https://onlinealarmkur.com/en/), which offers an online alarm clock, timer, stopwatch, countdown, and more.
